@@ -10,15 +10,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-fconstexpr-depth=100000 -fconstexpr-loop-limit=100000000 -fconstexpr-ops-limit=1000000000)
 endif()
 
-# FetchContent to download Google Benchmark
-include(FetchContent)
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing" FORCE)
-
-FetchContent_Declare(
-  benchmark
-  URL https://github.com/google/benchmark/archive/refs/tags/v1.8.3.tar.gz
-)
-FetchContent_MakeAvailable(benchmark)
+# Use Conan for Google Benchmark
+find_package(benchmark REQUIRED)
 
 # Add our benchmark executable
 add_executable(dispatch_benchmark benchmark.cpp)
