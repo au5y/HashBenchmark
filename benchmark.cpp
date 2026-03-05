@@ -1,23 +1,18 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
+#include <string>
+#include <vector>
+#include <random>
 #include <benchmark/benchmark.h>
 
-// --- Callback Signature ---
 using MsgCallback = void(*)(const uint8_t* payload, uint16_t len);
 
-// --- Handler Generator ---
 template <uint16_t ID>
 void handler_impl(const uint8_t* payload, uint16_t /*len*/) {
-    // Volatile write to prevent dead-code elimination
     volatile uint8_t sink = payload[0];
     (void)sink;
 }
-
-// --- Data Generation ---
-// Generate arrays of unique 16-bit IDs where:
-// bits [15:11] = subsystem (0-31)
-// bits [10:0] = message type (0-2047)
 
 template <size_t N>
 constexpr std::array<uint16_t, N> generate_ids() {
@@ -30,12 +25,6 @@ constexpr std::array<uint16_t, N> generate_ids() {
     return arr;
 }
 
-// Dataset sizes
-constexpr auto IDS_128 = generate_ids<128>();
-constexpr auto IDS_500 = generate_ids<500>();
-constexpr auto IDS_2000 = generate_ids<2000>();
-
-// Helper to get callback array from ID array
 template <size_t N, size_t... Is>
 constexpr std::array<MsgCallback, N> generate_callbacks_impl(std::index_sequence<Is...>) {
     return { handler_impl<Is>... };
@@ -45,15 +34,6 @@ template <size_t N>
 constexpr std::array<MsgCallback, N> generate_callbacks() {
     return generate_callbacks_impl<N>(std::make_index_sequence<N>{});
 }
-
-constexpr auto CBS_128 = generate_callbacks<128>();
-constexpr auto CBS_500 = generate_callbacks<500>();
-constexpr auto CBS_2000 = generate_callbacks<2000>();
-
-
-// ============================================================================
-// Approach 1: compile-time perfect hash over a static array (CHD Algorithm)
-// ============================================================================
 
 constexpr uint32_t mph_hash(uint32_t key, uint32_t seed) {
     key ^= seed;
@@ -182,15 +162,6 @@ constexpr PerfectHashTable<N> build_perfect_hash(
     return table;
 }
 
-constexpr auto PH_128  = build_perfect_hash(IDS_128, CBS_128);
-constexpr auto PH_500  = build_perfect_hash(IDS_500, CBS_500);
-constexpr auto PH_2000 = build_perfect_hash(IDS_2000, CBS_2000);
-
-
-// ============================================================================
-// Approach 2: sorted array with constexpr binary search
-// ============================================================================
-
 struct CallbackEntry {
     uint16_t msg_id;
     MsgCallback handler;
@@ -205,9 +176,7 @@ struct CallbackEntry {
 
 template<typename T>
 constexpr void cx_swap(T& a, T& b) {
-    T tmp = a;
-    a = b;
-    b = tmp;
+    T tmp = a; a = b; b = tmp;
 }
 
 template<typename T, size_t N>
@@ -232,9 +201,7 @@ constexpr void cx_quicksort(std::array<T, N>& arr, int low, int high) {
 
 template<size_t N>
 constexpr std::array<CallbackEntry, N> cx_sort(std::array<CallbackEntry, N> arr) {
-    if constexpr (N > 0) {
-        cx_quicksort(arr, 0, N - 1);
-    }
+    if constexpr (N > 0) cx_quicksort(arr, 0, N - 1);
     return arr;
 }
 
@@ -250,10 +217,6 @@ constexpr std::array<CallbackEntry, N> build_sorted_array(
     }
     return cx_sort(arr);
 }
-
-constexpr auto SA_128  = build_sorted_array(IDS_128, CBS_128);
-constexpr auto SA_500  = build_sorted_array(IDS_500, CBS_500);
-constexpr auto SA_2000 = build_sorted_array(IDS_2000, CBS_2000);
 
 template <size_t N>
 inline MsgCallback sa_dispatch(const std::array<CallbackEntry, N>& table, uint16_t msg_id) {
@@ -271,11 +234,6 @@ inline MsgCallback sa_dispatch(const std::array<CallbackEntry, N>& table, uint16
     }
     return nullptr;
 }
-
-
-// ============================================================================
-// Approach 3: multi-level static array exploiting ID bit structure
-// ============================================================================
 
 static constexpr size_t NUM_SUBSYSTEMS = 32;
 static constexpr size_t NUM_MSG_TYPES  = 2048;
@@ -311,149 +269,95 @@ inline constexpr TrieDispatchTable build_trie(
     const std::array<MsgCallback, N>& cbs)
 {
     TrieDispatchTable t;
-    for (size_t i = 0; i < N; ++i) {
-        t.map(keys[i], cbs[i]);
-    }
+    for (size_t i = 0; i < N; ++i) t.map(keys[i], cbs[i]);
     return t;
 }
 
-constexpr auto TRIE_128  = build_trie(IDS_128, CBS_128);
-constexpr auto TRIE_500  = build_trie(IDS_500, CBS_500);
-constexpr auto TRIE_2000 = build_trie(IDS_2000, CBS_2000);
-
-
-// ============================================================================
-// Benchmarking
-// ============================================================================
-
-#include <vector>
-#include <random>
-
-// Runtime array of 10,000 randomized IDs (valid and invalid mix)
 std::vector<uint16_t> generate_test_data() {
     std::vector<uint16_t> test_ids;
     test_ids.reserve(10000);
     std::mt19937 gen(42);
     std::uniform_int_distribution<uint16_t> dist(0, 65535);
-
-    for (int i = 0; i < 10000; ++i) {
-        test_ids.push_back(dist(gen));
-    }
+    for (int i = 0; i < 10000; ++i) test_ids.push_back(dist(gen));
     return test_ids;
 }
 
 const std::vector<uint16_t> TEST_IDS = generate_test_data();
 const uint8_t DUMMY_PAYLOAD[8] = {1, 2, 3, 4, 5, 6, 7, 8};
 
-// ----------------------------------------------------------------------------
-// Perfect Hash Benchmarks
-// ----------------------------------------------------------------------------
+template <size_t N>
+struct Tables {
+    static constexpr auto IDS = generate_ids<N>();
+    static constexpr auto CBS = generate_callbacks<N>();
+    static constexpr auto PH = build_perfect_hash(IDS, CBS);
+    static constexpr auto SA = build_sorted_array(IDS, CBS);
+    static constexpr auto TRIE = build_trie(IDS, CBS);
+};
 
-static void BM_PerfectHash_128(benchmark::State& state) {
+constexpr size_t cx_pow(size_t base, size_t exp) {
+    size_t res = 1;
+    for (size_t i = 0; i < exp; ++i) res *= base;
+    return res;
+}
+
+template <size_t Lower, size_t Mult, size_t... Is>
+constexpr auto make_geom_seq(std::index_sequence<Is...>) {
+    return std::index_sequence<(Lower * cx_pow(Mult, Is))...>{};
+}
+
+template <size_t... Is, size_t... Js>
+constexpr auto merge_seqs(std::index_sequence<Is...>, std::index_sequence<Js...>) {
+    return std::index_sequence<Is..., Js...>{};
+}
+
+using Hardcoded_checks = std::index_sequence<4, 126, 13056>;
+using CustomRange = decltype(make_geom_seq<8, 8>(std::make_index_sequence<4>{}));
+using AllBenchmarkSizes = decltype(merge_seqs(Hardcoded_checks{}, CustomRange{}));
+
+template <size_t N>
+void BM_PerfectHash(benchmark::State& state) {
     for (auto _ : state) {
         for (uint16_t id : TEST_IDS) {
-            auto handler = PH_128.dispatch(id);
+            auto handler = Tables<N>::PH.dispatch(id);
             benchmark::DoNotOptimize(handler);
             if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
         }
     }
 }
-BENCHMARK(BM_PerfectHash_128);
 
-static void BM_PerfectHash_500(benchmark::State& state) {
+template <size_t N>
+void BM_SortedArray(benchmark::State& state) {
     for (auto _ : state) {
         for (uint16_t id : TEST_IDS) {
-            auto handler = PH_500.dispatch(id);
+            auto handler = sa_dispatch(Tables<N>::SA, id);
             benchmark::DoNotOptimize(handler);
             if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
         }
     }
 }
-BENCHMARK(BM_PerfectHash_500);
 
-static void BM_PerfectHash_2000(benchmark::State& state) {
+template <size_t N>
+void BM_StructuredTrie(benchmark::State& state) {
     for (auto _ : state) {
         for (uint16_t id : TEST_IDS) {
-            auto handler = PH_2000.dispatch(id);
+            auto handler = Tables<N>::TRIE.lookup(id);
             benchmark::DoNotOptimize(handler);
             if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
         }
     }
 }
-BENCHMARK(BM_PerfectHash_2000);
 
-// ----------------------------------------------------------------------------
-// Sorted Array Benchmarks
-// ----------------------------------------------------------------------------
-
-static void BM_SortedArray_128(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = sa_dispatch(SA_128, id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
+template <size_t... Ns>
+void RegisterAll(std::index_sequence<Ns...>) {
+    (benchmark::RegisterBenchmark(std::string("PerfectHash/" + std::to_string(Ns)), BM_PerfectHash<Ns>), ...);
+    (benchmark::RegisterBenchmark(std::string("SortedArray/" + std::to_string(Ns)), BM_SortedArray<Ns>), ...);
+    (benchmark::RegisterBenchmark(std::string("StructuredTrie/" + std::to_string(Ns)), BM_StructuredTrie<Ns>), ...);
 }
-BENCHMARK(BM_SortedArray_128);
 
-static void BM_SortedArray_500(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = sa_dispatch(SA_500, id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
+int main(int argc, char** argv) {
+    benchmark::Initialize(&argc, argv);
+    RegisterAll(AllBenchmarkSizes{});
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
+    return 0;
 }
-BENCHMARK(BM_SortedArray_500);
-
-static void BM_SortedArray_2000(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = sa_dispatch(SA_2000, id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
-}
-BENCHMARK(BM_SortedArray_2000);
-
-// ----------------------------------------------------------------------------
-// Structured Trie Benchmarks
-// ----------------------------------------------------------------------------
-
-static void BM_StructuredTrie_128(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = TRIE_128.lookup(id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
-}
-BENCHMARK(BM_StructuredTrie_128);
-
-static void BM_StructuredTrie_500(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = TRIE_500.lookup(id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
-}
-BENCHMARK(BM_StructuredTrie_500);
-
-static void BM_StructuredTrie_2000(benchmark::State& state) {
-    for (auto _ : state) {
-        for (uint16_t id : TEST_IDS) {
-            auto handler = TRIE_2000.lookup(id);
-            benchmark::DoNotOptimize(handler);
-            if (handler) handler(DUMMY_PAYLOAD, sizeof(DUMMY_PAYLOAD));
-        }
-    }
-}
-BENCHMARK(BM_StructuredTrie_2000);
-
-BENCHMARK_MAIN();
