@@ -2,3 +2,4 @@ build/
 benchmark_results.json
 compile_times.json
 benchmark_plot.png
+results.md

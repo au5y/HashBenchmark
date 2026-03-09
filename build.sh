@@ -94,10 +94,11 @@ if [[ $SKIP_COMPILE_BENCH -eq 0 && -f compile_times.json ]]; then
     PLOT_ARGS="${PLOT_ARGS} --compile compile_times.json"
 fi
 # shellcheck disable=SC2086
-python3 plot_benchmarks.py ${PLOT_ARGS} --output benchmark_plot.png
+python3 plot_benchmarks.py ${PLOT_ARGS} --output benchmark_plot.png --report results.md
 
 echo ""
 echo "Done. Outputs:"
 echo "  benchmark_results.json  — raw Google Benchmark data"
 [[ $SKIP_COMPILE_BENCH -eq 0 ]] && echo "  compile_times.json      — per-(strategy,N) compile times"
 echo "  benchmark_plot.png      — comparison plot"
+echo "  results.md              — markdown summary with tables and plot"
